@@ -35,6 +35,7 @@ struct MvmThreadData {
     uint32_t sec;
     bool sec_reuse;
     uint16_t sec_mask;
+    bool la_active;
     uint8_t sec_rep;
     uint32_t layer;
     uint32_t start_i;

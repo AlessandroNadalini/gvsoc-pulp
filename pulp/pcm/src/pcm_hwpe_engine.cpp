@@ -3,64 +3,75 @@
 #include <cstdint>
 #include <pcm.hpp>
 
+// Helper function for selecting the right sector when reusing matrix weights
+uint8_t input_sec_sel(uint16_t sec_mask, bool sec_reuse, uint8_t sec_rep, uint8_t sec) {
+    switch (sec_mask)
+    {
+    case 0x0001:
+        return sec_rep;
+    case 0x0010:
+        return sec_rep;
+    case 0x0100:
+        return sec_rep;
+    case 0x1000:
+        return sec_rep;
+    case 0x0011:
+        if (sec_reuse) {
+            return sec + 2;
+        } else {
+            return sec;
+        }
+    case 0x1100:
+        if (sec_reuse) {
+            return sec + 2;
+        } else {
+            return sec;
+        }
+    case 0x0111:
+        return sec;
+    case 0x1110:
+        return sec;
+    default:
+        return sec;
+    }
+}
+
+uint8_t weight_sec_sel(uint16_t sec_mask, bool sec_reuse, uint8_t sec_rep, uint8_t sec) {
+    switch (sec_mask)
+    {
+    case 0x0001:
+        return 0;
+    case 0x0010:
+        return 1;
+    case 0x0100:
+        return 2;
+    case 0x1000:
+        return 3;
+    case 0x0011:
+        return sec;
+    case 0x1100:
+        return sec + 2;
+    case 0x0111:
+        return sec;
+    case 0x1110:
+        return sec + 1;
+    default:
+        return sec;
+    }
+}
+
 // Thread worker function for computing MVM innermost loop
 void* mvm_thread_worker(void* arg) {
     MvmThreadData* data = (MvmThreadData*)arg;
 
     uint8_t inp_sec, weight_sec;
 
-    switch (data->sec_mask)
-    {
-    case 0x0001:
-        weight_sec = 0;
-        inp_sec = data->sec_rep;
-        break;
-    case 0x0010:
-        weight_sec = 1;
-        inp_sec = data->sec_rep;
-        break;
-    case 0x0100:
-        weight_sec = 2;
-        inp_sec = data->sec_rep;
-        break;
-    case 0x1000:
-        weight_sec = 3;
-        inp_sec = data->sec_rep;
-        break;
-    case 0x0011:
-        if (data->sec_reuse) {
-            weight_sec = data->sec;
-            inp_sec = data->sec + 2;
-        } else {
-            weight_sec = data->sec;
-            inp_sec = data->sec;
-        }
-        break;
-    case 0x1100:
-        if (data->sec_reuse) {
-            weight_sec = data->sec + 2;
-            inp_sec = data->sec + 2;
-        } else {
-            weight_sec = data->sec + 2;
-            inp_sec = data->sec;
-        }
-        break;
-    case 0x0111:
-        weight_sec = data->sec;
-        inp_sec = data->sec;
-        break;
-    case 0x1110:
-        weight_sec = data->sec + 1;
-        inp_sec = data->sec;
-        break;
-    default:
-        weight_sec = data->sec;
-        inp_sec = data->sec;
-        break;
-    }
+    inp_sec = input_sec_sel(data->sec_mask, data->sec_reuse, data->sec_rep, data->sec);
+    weight_sec = weight_sec_sel(data->sec_mask, data->sec_reuse, data->sec_rep, data->sec);
     
     for (uint32_t i = data->start_i; i < data->end_i; i++) {
-        data->full_prec_res[i] += (int32_t)data->Xi_buf[data->j + inp_sec * 128] * 
+        if (data->la_active)
+            data->full_prec_res[i] += (int32_t)data->Xi_buf[data->j + inp_sec * 128] * 
                                   (int32_t)data->weights[512 * 512 * data->layer + i + 512 * (data->j + weight_sec * 128)];
     }
     
@@ -95,6 +106,7 @@ void Pcm_HWPE_Engine::compute_mvm(Pcm_HWPE *pcm, uint16_t sec_mask, bool sec_reu
     uint8_t layer;
     uint8_t sectors[4] = {0, 0, 0, 0};
     uint8_t active_sectors = 0;
+    uint8_t local_array[4] = {0, 0, 0, 0};
     
     // Initialize accumulators
     for (uint32_t i=0; i<512; i++){
@@ -119,6 +131,15 @@ void Pcm_HWPE_Engine::compute_mvm(Pcm_HWPE *pcm, uint16_t sec_mask, bool sec_reu
 
     // Compute MVM - only signed MVM implemented
     for (uint32_t sec=0; sec<active_sectors; sec++) {
+        // Detect active local array
+        for (uint32_t la=0; la<4; la++) {
+            if (sectors[sec] != 0) {
+                local_array[la] = sectors[sec] & (1 << la);
+            } else {
+                local_array[la] = sectors[weight_sec_sel(sec_mask, sec_reuse, sec_rep, sec)] & (1 << la);
+            }
+        }
+
         for (uint32_t j=0; j<128; j++){
             // Parallelize the innermost loop with pthreads
             pthread_t threads[NUM_THREADS];
@@ -134,6 +155,7 @@ void Pcm_HWPE_Engine::compute_mvm(Pcm_HWPE *pcm, uint16_t sec_mask, bool sec_reu
                 thread_data[t].sec = sec;
                 thread_data[t].sec_reuse = sec_reuse;
                 thread_data[t].sec_mask = sec_mask;
+                thread_data[t].la_active = local_array[t] != 0;
                 thread_data[t].sec_rep = sec_rep;
                 thread_data[t].layer = layer;
                 thread_data[t].start_i = t * items_per_thread;
@@ -176,6 +198,9 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
     uint8_t active_sectors = 0;
     uint8_t sec_reps = 0;
     uint16_t sec_mask = 0;
+    uint8_t local_array[4] = {0, 0, 0, 0};
+    uint8_t empty_la = 0;
+    uint8_t la_on = 0;
     
     // Detect active sectors
     sectors[0] = (this->pcm->register_file[PCM_HWPE_ACT_SECT_0>>2]) & 0x0F;
@@ -187,6 +212,12 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
         pcm->trace.msg(vp::TraceLevel::DEBUG, "sector[%d] = %x\n", sec, sectors[sec]);
         if(sectors[sec] != 0){
             active_sectors++;
+
+            // Detect active local array
+            for (uint32_t la=0; la<4; la++) {
+                local_array[la] = sectors[sec] & (1 << la);
+                this->pcm->trace.msg(vp::TraceLevel::DEBUG, "la[%d] = %x\n", la, local_array[la]);
+            }
         }
 
         sec_mask |= (sectors[sec] != 0) << (sec*4);
@@ -209,8 +240,9 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
 
     // Initial fill of the Xi buffer
     this->pcm->trace.msg(vp::TraceLevel::DEBUG, "Filling Xi buffer\n");
-    for (int8_t i = 0; i<refill_factor; i++)
-        *latency += this->pcm->inp_stream.rw_data(64, (void *)(this->Xi_buf+i*64), -1);
+    for (int8_t i = 0; i<refill_factor; i++) {
+            *latency += this->pcm->inp_stream.rw_data(64, (void *)(this->Xi_buf+i*64), -1);
+    }
 
     // Read Xi buffer - just for debugging
     for (int i = 0; i < 512; i++)
@@ -229,8 +261,17 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
     *latency += this->mvm_latency;
 
     this->pcm->trace.msg(vp::TraceLevel::DEBUG, "Streaming out results...\n");
+    empty_la = 0;
+    la_on = 0;
     for (uint32_t i=0; i<8; i++) {
-        this->pcm->out_stream.rw_data(64, (void *)(this->Yi+64*i), -1);
+        this->pcm->trace.msg(vp::TraceLevel::DEBUG, "la_on = %d, empty_la = %d\n", la_on, empty_la);
+        if (local_array[i>>1] != 0) {
+            this->pcm->out_stream.rw_data(64, (void *)(this->Yi+64*i-empty_la), -1);
+            la_on++;
+        } else {
+            if (la_on > 0 && ((la_on>>1) != (i>>1)) && ((la_on>>1) != (i>>2)))
+                empty_la++;
+        }
     }
 
     // Weights re-use
@@ -241,8 +282,16 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
             *latency += this->mvm_latency;
 
             this->pcm->trace.msg(vp::TraceLevel::DEBUG, "Streaming out results...\n");
+            empty_la = 0;
+            la_on = 0;
             for (uint32_t i=0; i<8; i++) {
-                this->pcm->out_stream.rw_data(64, (void *)(this->Yi+64*i), -1);
+                if (local_array[i>>1] != 0) {
+                    this->pcm->out_stream.rw_data(64, (void *)(this->Yi+64*i-empty_la), -1);
+                    la_on++;
+                } else {
+                    if (la_on > 0 && ((la_on>>1) != (i>>1) && ((la_on>>1) != (i>>2))))
+                        empty_la++;
+                }
             }
         }
     }
@@ -250,7 +299,7 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
     for(uint32_t j=1; j<(this->pcm->register_file[PCM_HWPE_NUM_JOBS >> 2]); j++) {
         // Refill Xi buffer
         for (int8_t i = 0; i<refill_factor; i++) {
-            this->pcm->inp_stream.rw_data(64, (void *)(this->Xi_buf+i*64), -1);
+                this->pcm->inp_stream.rw_data(64, (void *)(this->Xi_buf+i*64), -1);
         }
 
         // Reading Xi buffer, just for debugging
@@ -265,9 +314,17 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
 
         // Stream outputs (we take into account the latency for the last stream out)
         this->pcm->trace.msg(vp::TraceLevel::DEBUG, "Streaming out results...\n");
+        empty_la = 0;
+        la_on = 0;
         if(j<(this->pcm->register_file[PCM_HWPE_NUM_JOBS >> 2])-1) {
             for (uint32_t i=0; i<8; i++) {
-                this->pcm->out_stream.rw_data(64, (void *)(this->Yi+64*i), -1);
+                if (local_array[i>>1] != 0) {
+                    this->pcm->out_stream.rw_data(64, (void *)(this->Yi+64*i-empty_la), -1);
+                    la_on++;
+                } else {
+                    if (la_on > 0 && ((la_on>>1) != (i>>1)) && ((la_on>>1) != (i>>2)))
+                        empty_la++;
+                }
             }
         }
 
@@ -278,9 +335,17 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
                 *latency += this->mvm_latency;
 
                 this->pcm->trace.msg(vp::TraceLevel::DEBUG, "Streaming out results...\n");
+                empty_la = 0;
+                la_on = 0;
                 if(j<(this->pcm->register_file[PCM_HWPE_NUM_JOBS >> 2])-1) {
                     for (uint32_t i=0; i<8; i++) {
-                        this->pcm->out_stream.rw_data(64, (void *)(this->Yi+64*i), -1);
+                        if (local_array[i>>1] != 0) {
+                            this->pcm->out_stream.rw_data(64, (void *)(this->Yi+64*i-empty_la), -1);
+                            la_on++;
+                        } else {
+                            if (la_on > 0 && ((la_on>>1) != (i>>1)) && ((la_on>>1) != (i>>2)))
+                                empty_la++;
+                        }
                     }
                 }
             }
@@ -294,8 +359,16 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
 
     // Last stream out: we take into account the latency for this data movement
     this->pcm->trace.msg(vp::TraceLevel::DEBUG, "Streaming out results...\n");
+    empty_la = 0;
+    la_on = 0;
     for (uint32_t i=0; i<8; i++) {
-        *latency+=this->pcm->out_stream.rw_data(64, (void *)(this->Yi+64*i), -1);
+        if (local_array[i>>1] != 0) {
+            *latency+=this->pcm->out_stream.rw_data(64, (void *)(this->Yi+64*i-empty_la), -1);
+            la_on++;
+        } else {
+            if (la_on > 0 && ((la_on>>1) != (i>>1)) && ((la_on>>1) != (i>>2)))
+                empty_la++;
+        }
     }
    
     return vp::IO_REQ_OK;
