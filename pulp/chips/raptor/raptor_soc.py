@@ -47,11 +47,12 @@ def calculate_north_south(n, tiling):
     return north, south
 
 class RaptorSoc (gvsoc.systree.Component):
-    def __init__(self, parent, name, parser, binary):
+    def __init__(self, parent, name, parser, binary, weights_path: str=None):
         super().__init__(parent, name)
 
         # Bin loader
-        loader = utils.loader.loader.ElfLoader(self, f'loader', binary=binary)
+        loader=utils.loader.loader.ElfLoader(self, f'loader', binary=binary)
+        self.loader = loader
 
         # Simulation engine killer
         killer=KillModule(self,'kill-module',kill_addr_base=RaptorArch.TEST_END_ADDR_START,kill_addr_size=RaptorArch.TEST_END_SIZE,nb_cores_to_wait=RaptorArch.NB_TILES)
@@ -62,9 +63,9 @@ class RaptorSoc (gvsoc.systree.Component):
         clock.o_CLOCK(self.i_CLOCK())
 
         # Create Tiles
-        cluster:List[Democritos_A_Tile] = []
+        self.cluster:List[Democritos_A_Tile] = []
         for id in range(0,RaptorArch.NB_TILES):
-            cluster.append(Democritos_A_Tile(self, f'a-tile-{id}', parser, id))
+            self.cluster.append(Democritos_A_Tile(self, f'a-tile-{id}', parser, id, weights_path))
         
         l2_mem = memory.Memory(self, f'L2-mem', size=RaptorArch.L2_SIZE, latency=1)
 
@@ -129,9 +130,9 @@ class RaptorSoc (gvsoc.systree.Component):
         for y in range(0,RaptorArch.N_TILES_Y):
             for x in range(1,RaptorArch.N_TILES_X+1):
                 print(f"[NoC] Adding tile {id} at position x={x} y={y}")
-                cluster[id].o_KILLER_OUTPUT(killer.i_INPUT())
-                cluster[id].o_NARROW_OUTPUT(noc.i_NARROW_INPUT(x,y))
-                noc.o_NARROW_MAP(cluster[id].i_NARROW_INPUT(),name=f'tile-{id}-l1-mem',base=RaptorArch.L1_ADDR_START+(id*RaptorArch.L1_TILE_OFFSET),size=RaptorArch.L1_SIZE, x=x, y=y, rm_base=False)
+                self.cluster[id].o_KILLER_OUTPUT(killer.i_INPUT())
+                self.cluster[id].o_NARROW_OUTPUT(noc.i_NARROW_INPUT(x,y))
+                noc.o_NARROW_MAP(self.cluster[id].i_NARROW_INPUT(),name=f'tile-{id}-l1-mem',base=RaptorArch.L1_ADDR_START+(id*RaptorArch.L1_TILE_OFFSET),size=RaptorArch.L1_SIZE, x=x, y=y, rm_base=False)
                 id += 1
 
         # Bind memory to noc
@@ -155,8 +156,16 @@ class RaptorSoc (gvsoc.systree.Component):
         # Bind loader
         for id in range(0,RaptorArch.NB_TILES):
             if (id == 0):
-                loader.o_OUT(cluster[id].i_LOADER()) #only cluster connected to the corner loads the elf
-            loader.o_START(cluster[id].i_FETCHEN())
-            loader.o_ENTRY(cluster[id].i_ENTRY())
+                loader.o_OUT(self.cluster[id].i_LOADER()) #only cluster connected to the corner loads the elf
+            loader.o_START(self.cluster[id].i_FETCHEN())
+            loader.o_ENTRY(self.cluster[id].i_ENTRY())
+
+    def set_weights_path(self, weights_path: str):
+        """Propagate weights_path to all A_Tiles after initialization.
+        This is called from configure() after the parameter is retrieved from gvrun.
+        """
+        if weights_path is not None:
+            for tile in self.cluster:
+                tile.set_weights_path(weights_path)
 
                                     

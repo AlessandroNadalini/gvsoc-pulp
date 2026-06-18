@@ -21,3 +21,9 @@ class Pcm(gvsoc.systree.Component):
 
     def o_stream_mst(self, itf: gvsoc.systree.SlaveItf):
         self.itf_bind('stream_mst', itf, signature='io')
+
+    def set_stim_file(self, stim_file: str):
+        """Update the stimulus file path for the PCM module."""
+        self.add_properties({
+            "stim_file": stim_file
+        })

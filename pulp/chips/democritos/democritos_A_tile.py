@@ -117,7 +117,7 @@ class Democritos_A_Tile(gvsoc.systree.Component):
         mvm_latency_ns = 300 # MVM latency in ns
         # Conversion of latency in clock cycles (TODO: make the clock frequency configurable)
         mvm_latency = int(mvm_latency_ns/((1/100000000)*(10**9)))
-        pcm = Pcm(self, 'pcm', mvm_latency=mvm_latency, stim_file=weights_path)
+        self.pcm = Pcm(self, 'pcm', mvm_latency=mvm_latency, stim_file=weights_path)
 
         # Fsync mm controller
         fsync_mm_ctrl = FSync_mm_ctrl(self,f'tile-{tid}-fs-ctrl-mm')
@@ -188,7 +188,7 @@ class Democritos_A_Tile(gvsoc.systree.Component):
                        size=DemocritosArch.STDOUT_SIZE, rm_base=False)
 
         # Bind OBI Xbar so that it can communuicate to PCM HWPE
-        obi_xbar.o_MAP(pcm.i_hwpe_slv(), name='local-pcm-hwpe',
+        obi_xbar.o_MAP(self.pcm.i_hwpe_slv(), name='local-pcm-hwpe',
                        base=DemocritosArch.PCM_START,
                        size=DemocritosArch.PCM_SIZE,
                        rm_base=True)
@@ -220,7 +220,7 @@ class Democritos_A_Tile(gvsoc.systree.Component):
         idma1.o_OFFLOAD_GRANT(idma_mm_ctrl.i_OFFLOAD_GRANT_iDMA1_OBI2AXI())
 
         # Bind PCM
-        pcm.o_stream_mst(l1_tcdm.i_PCM_HWPE_INPUT())
+        self.pcm.o_stream_mst(l1_tcdm.i_PCM_HWPE_INPUT())
 
         # Bind FractalSync ports
         fsync_mm_ctrl.o_XIF_2_FRACTAL_EAST_WEST(self.__o_SLAVE_EAST_WEST_FRACTAL())
@@ -328,3 +328,8 @@ class Democritos_A_Tile(gvsoc.systree.Component):
 
     def __i_KILLER_OUTPUT(self) -> gvsoc.systree.SlaveItf:
         return gvsoc.systree.SlaveItf(self, 'killer_output', signature='io')
+
+    def set_weights_path(self, weights_path: str):
+        """Set the stimulus file path for the PCM module after initialization."""
+        if weights_path is not None:
+            self.pcm.set_stim_file(weights_path)
