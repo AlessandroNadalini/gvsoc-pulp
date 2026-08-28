@@ -171,6 +171,9 @@ public:
     // Internal state
     vp::reg_32 state;
 
+    // Done IRQ
+    vp::WireMaster<bool> done;
+
 private:
     static vp::IoReqStatus hwpe_slave(vp::Block *__this, vp::IoReq *req);
 

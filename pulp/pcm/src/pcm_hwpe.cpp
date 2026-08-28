@@ -14,6 +14,9 @@ Pcm_HWPE::Pcm_HWPE(vp::ComponentConf &config) : vp::Component(config)
     // Streamer master port
     this->new_master_port("stream_mst", &this->stream_mst);
 
+    // Done IRQ master port
+    this->new_master_port("irq", &this->done);
+
     // Input & output streamers
     this->inp_stream = Pcm_HWPE_Streamer(this, false);
     this->out_stream = Pcm_HWPE_Streamer(this, true);
@@ -26,9 +29,6 @@ Pcm_HWPE::Pcm_HWPE(vp::ComponentConf &config) : vp::Component(config)
     this->fsm_event = this->event_new(&Pcm_HWPE::fsm_handler);
     this->fsm_end_event = this->event_new(&Pcm_HWPE::fsm_end_handler);
 
-    // Initial state of the controller FSM
-    this->state.set(IDLE);
-
     // Traces
     this->traces.new_trace("trace", &this->trace);
 }
@@ -37,6 +37,12 @@ void Pcm_HWPE::reset(bool active) {
     if (active) {
         for (uint32_t i=0; i<56; i++)
             this->register_file[i] = 0x0;
+
+        // Initial state of the controller FSM
+        this->state.set(IDLE);
+
+        // Done reset
+        this->done.sync(false);
     }
 }
 

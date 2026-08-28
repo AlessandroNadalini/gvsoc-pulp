@@ -46,6 +46,7 @@ void Pcm_HWPE::fsm_end_handler(vp::Block *__this, vp::ClockEvent *event){
     _this->state.set(IDLE);
     //_this->trace.msg(vp::TraceLevel::DEBUG, "Setting state to IDLE...\n");
     _this->register_file[PCM_HWPE_STATUS>>2] = 0x1;
+    _this->done.sync(true);
 }
 
 void Pcm_HWPE::fsm_loop() {

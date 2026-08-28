@@ -274,11 +274,9 @@ class Cluster(st.Component):
             self.bind(redmule, 'out', l1, 'redmule_in') """
 
         # PCM HWPE
-        '''
         for i in range(0, nb_pe):
-            self.bind(pcm, 'o_irq', event_unit, 'in_event_%d_pe_%d' % (pcm_irq, i))
-        '''
-
+            self.bind(pcm, 'irq', event_unit, 'in_event_%d_pe_%d' % (pcm_irq, i))
+        
         self.bind(pcm, 'stream_mst', l1, 'pcm_in')
 
         # SoftEx HWPE
