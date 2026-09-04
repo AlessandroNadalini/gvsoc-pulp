@@ -16,6 +16,7 @@
 
 import os
 import gvsoc.systree as st
+from gvrun.parameter import TargetParameter
 from pulp.chips.megatron.pulp_open import Pulp_open
 from devices.hyperbus.hyperflash import Hyperflash
 from devices.spiflash.spiflash import Spiflash
@@ -42,8 +43,17 @@ class Pulp_open_board(st.Component):
         attr = PulpOpenAttr(self)
         self.set_attributes(attr)
 
+        # This declares a target parameter which can be set on the command-line using the
+        # --param option when using gvrun script
+        TargetParameter(
+            self, name='weights_path', value=None,
+            description='Path to the CSV weights file to load into the PCM accelerator',
+            cast=str
+        )
+
         # Pulp
         pulp = Pulp_open(self, 'chip', attr, parser, use_ddr=use_ddr, pim_support=pim_support, pulpnn=pulpnn)
+        self.pulp = pulp
 
         # Flash
         hyperflash = Hyperflash(self, 'hyperflash')
@@ -79,6 +89,14 @@ class Pulp_open_board(st.Component):
 
         uart_checker = Uart_checker(self, 'uart_checker')
         self.bind(pulp, 'uart0', uart_checker, 'input')
+
+    def configure(self):
+        # We configure the PCM weights path now, in the configure step, since it is coming
+        # from a parameter which can be set either from the command line or from the build
+        # process (see gvrun's --param option).
+        weights_path = self.get_parameter('weights_path')
+        if weights_path is not None:
+            self.pulp.set_weights_path(weights_path)
 
 
 class Pulp_open_nn_board(Pulp_open_board):

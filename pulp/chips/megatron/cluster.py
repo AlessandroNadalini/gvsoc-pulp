@@ -137,8 +137,8 @@ class Cluster(st.Component):
         # PCM
         #mvm_latency = cluster_conf.get_property('pcm/mvm_latency', int)
         mvm_latency = 300 # MVM latency in ns
-        weights_path = "" # FIX THIS!!
-        pcm = Pcm(self, 'pcm', mvm_latency=mvm_latency, stim_file=weights_path)
+        pcm = Pcm(self, 'pcm', mvm_latency=mvm_latency, stim_file=None)
+        self.pcm = pcm
 
         # SoftEx
         softex = Softex(self, 'softex')
@@ -295,6 +295,10 @@ class Cluster(st.Component):
         for i in range(0, nb_pe):
             self.bind(icache_ctrl, 'flush', pes[i], 'flush_cache')
 
+
+    def set_weights_path(self, weights_path):
+        """Update the path to the CSV weights file to be loaded into the PCM accelerator."""
+        self.pcm.set_stim_file(weights_path)
 
     def _reloc_mapping(self, mapping):
         """Relocate a mapping to this cluster, depending on the cluster ID.

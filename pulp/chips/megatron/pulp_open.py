@@ -68,6 +68,7 @@ class Pulp_open(st.Component):
         for cid in range(0, nb_cluster):
             cluster_name = get_cluster_name(cid)
             clusters.append(Cluster(self, cluster_name, config_file=cluster_config_file, cid=cid, pulpnn=pulpnn))
+        self.clusters = clusters
 
         # Soc
         soc = Soc(self, 'soc', attr.soc, parser, config_file=soc_config_file, chip=self, cluster=clusters[0], pim_support=pim_support,pulpnn=pulpnn)
@@ -179,6 +180,11 @@ class Pulp_open(st.Component):
                 self.bind(soc, 'pim_toggle', ddr, 'pim_toggle')
                 self.bind(ddr, 'pim_notify', pim_component, 'pim_notify')
                 self.bind(pim_component, 'pim_data', ddr, 'pim_data')
+
+    def set_weights_path(self, weights_path):
+        """Update the path to the CSV weights file to be loaded into the PCM accelerator(s)."""
+        for cluster in self.clusters:
+            cluster.set_weights_path(weights_path)
 
     def gen_gtkw_conf(self, tree, traces):
         if tree.get_view() == 'overview':
