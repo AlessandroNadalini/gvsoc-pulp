@@ -3,6 +3,9 @@
 
 #define N_CFG_REGS 49
 
+// Job queue depth (ACQUIRE/TRIGGER/SOFT_CLEAR protocol)
+#define PCM_HWPE_N_CONTEXT   2
+
 #define PCM_HWPE_BASE   0x0
 
 #define PCM_HWPE_TRIG                   (PCM_HWPE_BASE + 0x00)
@@ -13,6 +16,12 @@
 #define PCM_HWPE_SOFT_CLEAR             (PCM_HWPE_BASE + 0x14)
 #define PCM_HWPE_CHK_STATE              (PCM_HWPE_BASE + 0x18)
 #define PCM_HWPE_CFG_DIM                (PCM_HWPE_BASE + 0x1C)
+// Start of the job-config register block (N_CFG_REGS words, up to
+// PCM_HWPE_EN_CASTING); alias kept for readability in the job-queue code.
+#define PCM_HWPE_JOB_REG_OFFS           PCM_HWPE_CFG_DIM
+// Convert an absolute PCM_HWPE_* job-config register offset into the index
+// of the corresponding word in a PcmJob's regs[] array (see pcm.hpp).
+#define PCM_JOB_REG_IDX(OFFSET)         (((OFFSET) - PCM_HWPE_JOB_REG_OFFS) >> 2)
 #define PCM_HWPE_CFG_2S_U_COMP          (PCM_HWPE_BASE + 0x20)
 #define PCM_HWPE_CFG_2S_U_2W_COMP       (PCM_HWPE_BASE + 0x24)
 #define PCM_HWPE_CFG_2S_COMP            (PCM_HWPE_BASE + 0x28)

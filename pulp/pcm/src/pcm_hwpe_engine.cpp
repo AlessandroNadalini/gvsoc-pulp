@@ -114,11 +114,11 @@ void Pcm_HWPE_Engine::compute_mvm(Pcm_HWPE *pcm, uint16_t sec_mask, bool sec_reu
     }
 
     // Detect active sectors
-    sectors[0] = (this->pcm->register_file[PCM_HWPE_ACT_SECT_0>>2]) & 0x0F;
-    sectors[1] = (this->pcm->register_file[PCM_HWPE_ACT_SECT_1>>2]) & 0x0F;
-    sectors[2] = (this->pcm->register_file[PCM_HWPE_ACT_SECT_2>>2]) & 0x0F;
-    sectors[3] = (this->pcm->register_file[PCM_HWPE_ACT_SECT_3>>2]) & 0x0F;
-    
+    sectors[0] = (this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_ACT_SECT_0)]) & 0x0F;
+    sectors[1] = (this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_ACT_SECT_1)]) & 0x0F;
+    sectors[2] = (this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_ACT_SECT_2)]) & 0x0F;
+    sectors[3] = (this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_ACT_SECT_3)]) & 0x0F;
+
     for (uint32_t sec=0; sec<4; sec++){
         pcm->trace.msg(vp::TraceLevel::DEBUG, "sector[%d] = %x\n", sec, sectors[sec]);
         if (sectors[sec] != 0) {
@@ -127,7 +127,7 @@ void Pcm_HWPE_Engine::compute_mvm(Pcm_HWPE *pcm, uint16_t sec_mask, bool sec_reu
     }
 
     // Detect active layer
-    layer = this->pcm->register_file[PCM_HWPE_ACT_LAYER>>2] & 0xFF;
+    layer = this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_ACT_LAYER)] & 0xFF;
 
     // Compute MVM - only signed MVM implemented
     for (uint32_t sec=0; sec<active_sectors; sec++) {
@@ -203,11 +203,11 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
     uint8_t la_on = 0;
     
     // Detect active sectors
-    sectors[0] = (this->pcm->register_file[PCM_HWPE_ACT_SECT_0>>2]) & 0x0F;
-    sectors[1] = (this->pcm->register_file[PCM_HWPE_ACT_SECT_1>>2]) & 0x0F;
-    sectors[2] = (this->pcm->register_file[PCM_HWPE_ACT_SECT_2>>2]) & 0x0F;
-    sectors[3] = (this->pcm->register_file[PCM_HWPE_ACT_SECT_3>>2]) & 0x0F;
-    
+    sectors[0] = (this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_ACT_SECT_0)]) & 0x0F;
+    sectors[1] = (this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_ACT_SECT_1)]) & 0x0F;
+    sectors[2] = (this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_ACT_SECT_2)]) & 0x0F;
+    sectors[3] = (this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_ACT_SECT_3)]) & 0x0F;
+
     for (uint32_t sec=0; sec<4; sec++){
         pcm->trace.msg(vp::TraceLevel::DEBUG, "sector[%d] = %x\n", sec, sectors[sec]);
         if(sectors[sec] != 0){
@@ -296,7 +296,7 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
         }
     }
 
-    for(uint32_t j=1; j<(this->pcm->register_file[PCM_HWPE_NUM_JOBS >> 2]); j++) {
+    for(uint32_t j=1; j<(this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_NUM_JOBS)]); j++) {
         // Refill Xi buffer
         for (int8_t i = 0; i<refill_factor; i++) {
                 this->pcm->inp_stream.rw_data(64, (void *)(this->Xi_buf+i*64), -1);
@@ -316,7 +316,7 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
         this->pcm->trace.msg(vp::TraceLevel::DEBUG, "Streaming out results...\n");
         empty_la = 0;
         la_on = 0;
-        if(j<(this->pcm->register_file[PCM_HWPE_NUM_JOBS >> 2])-1) {
+        if(j<(this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_NUM_JOBS)])-1) {
             for (uint32_t i=0; i<8; i++) {
                 if (local_array[i>>1] != 0) {
                     this->pcm->out_stream.rw_data(64, (void *)(this->Yi+64*i-empty_la), -1);
@@ -337,7 +337,7 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
                 this->pcm->trace.msg(vp::TraceLevel::DEBUG, "Streaming out results...\n");
                 empty_la = 0;
                 la_on = 0;
-                if(j<(this->pcm->register_file[PCM_HWPE_NUM_JOBS >> 2])-1) {
+                if(j<(this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_NUM_JOBS)])-1) {
                     for (uint32_t i=0; i<8; i++) {
                         if (local_array[i>>1] != 0) {
                             this->pcm->out_stream.rw_data(64, (void *)(this->Yi+64*i-empty_la), -1);
@@ -352,8 +352,8 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
         }
     }
 
-    if((this->pcm->register_file[PCM_HWPE_TOTAL_LENGTH >> 2] % 8) != 0) {
-        this->pcm->trace.msg(vp::TraceLevel::DEBUG, "Total length = %d, total_length % 8 = %d\n", (this->pcm->register_file[PCM_HWPE_TOTAL_LENGTH >> 2]), (this->pcm->register_file[PCM_HWPE_TOTAL_LENGTH >> 2] % 8));
+    if((this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_TOTAL_LENGTH)] % 8) != 0) {
+        this->pcm->trace.msg(vp::TraceLevel::DEBUG, "Total length = %d, total_length % 8 = %d\n", (this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_TOTAL_LENGTH)]), (this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_TOTAL_LENGTH)] % 8));
         this->pcm->trace.fatal("Leftovers still not implemented!! Please zero-pad your inputs/outputs\n");
     }
 

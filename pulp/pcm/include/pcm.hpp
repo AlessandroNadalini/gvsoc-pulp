@@ -54,6 +54,16 @@ enum pcm_hwpe_state_t {
     FINISHED
 };
 
+// Snapshot of one queued job's config-register block (offsets
+// PCM_HWPE_JOB_REG_OFFS..PCM_HWPE_EN_CASTING, N_CFG_REGS words). It exists 
+// solely so commit()/start_next_job() can stage/materialize a job's parameters
+// into/out of register_file without letting the next job's writes clobber an
+//  already-committed-but-not-yet-dispatched one.
+struct PcmJob {
+    uint32_t regs[N_CFG_REGS];
+    PcmJob() { for (uint32_t i = 0; i < N_CFG_REGS; i++) regs[i] = 0; }
+};
+
 class Pcm_HWPE_Engine {
     public:
         Pcm_HWPE_Engine(Pcm_HWPE* pcm);
@@ -174,6 +184,11 @@ public:
     // Done IRQ
     vp::WireMaster<bool> done;
 
+    // Currently dispatched job's snapshot (populated by start_next_job()),
+    // read directly by the engine/streamer datapath in place of
+    // register_file for job-scoped registers (see PCM_JOB_REG_IDX)
+    PcmJob job;
+
 private:
     static vp::IoReqStatus hwpe_slave(vp::Block *__this, vp::IoReq *req);
 
@@ -189,6 +204,24 @@ private:
     vp::ClockEvent *fsm_start_event;
     vp::ClockEvent *fsm_event;
     vp::ClockEvent *fsm_end_event;
+
+    // Job queue (ACQUIRE/TRIGGER/SOFT_CLEAR protocol, depth
+    // PCM_HWPE_N_CONTEXT). Job-config register writes redirect straight
+    // into contexts[cxt_cfg_ptr] (see hwpe_slave()), never into the flat
+    // register_file.
+    PcmJob   contexts[PCM_HWPE_N_CONTEXT];
+    uint8_t  job_id_counter;
+    int      job_state;                    // 0 = free, -2 = acquired-not-committed
+    int      job_pending;                  // 0..PCM_HWPE_N_CONTEXT
+    int      cxt_cfg_ptr;
+    int      cxt_use_ptr;
+    int32_t  cxt_job_id[PCM_HWPE_N_CONTEXT];
+    int32_t  running_job_id;
+
+    int32_t acquire();
+    void    commit(bool start);
+    void    start_next_job();
+    void    soft_clear();
 };
 
 #endif
