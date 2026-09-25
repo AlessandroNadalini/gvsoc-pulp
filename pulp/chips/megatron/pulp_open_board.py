@@ -34,7 +34,7 @@ else:
 
 class Pulp_open_board(st.Component):
 
-    def __init__(self, parent, name, parser, options, use_ddr=False, pim_support=False, pulpnn=False):
+    def __init__(self, parent, name, parser, options, use_ddr=False, pim_support=False, pulpnn=False, flexv=True):
 
         super(Pulp_open_board, self).__init__(parent, name, options=options)
 
@@ -52,7 +52,7 @@ class Pulp_open_board(st.Component):
         )
 
         # Pulp
-        pulp = Pulp_open(self, 'chip', attr, parser, use_ddr=use_ddr, pim_support=pim_support, pulpnn=pulpnn)
+        pulp = Pulp_open(self, 'chip', attr, parser, use_ddr=use_ddr, pim_support=pim_support, pulpnn=pulpnn, flexv=flexv)
         self.pulp = pulp
 
         # Flash

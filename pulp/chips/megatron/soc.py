@@ -57,7 +57,7 @@ class SocConf(st.Component):
 
 class Soc(st.Component):
 
-    def __init__(self, parent, name, attr: SocAttr, parser, config_file, chip, cluster, pim_support=False, pulpnn=False):
+    def __init__(self, parent, name, attr: SocAttr, parser, config_file, chip, cluster, pim_support=False, pulpnn=False, flexv=False):
         super(Soc, self).__init__(parent, name)
 
         #
@@ -104,7 +104,7 @@ class Soc(st.Component):
         fll_cluster = Fll(self, 'fll_cluster')
 
         # FC
-        fc = iss.FcCore(self, 'fc', pulpnn=pulpnn)
+        fc = iss.FcCore(self, 'fc', pulpnn=pulpnn, flexv=flexv)
 
         # FC ITC
         fc_itc = itc.Itc_v1(self, 'fc_itc')
