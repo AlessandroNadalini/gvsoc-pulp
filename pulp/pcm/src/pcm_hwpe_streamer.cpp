@@ -59,6 +59,10 @@ void Pcm_HWPE_Streamer::configure(
 	this->d2_stride = d2_stride	;
 	this->d3_stride	= d3_stride	;
     this->pos       = 0			;
+	this->tot_iters = 0			;
+	this->d0_iters  = 0			;
+	this->d1_iters  = 0			;
+	this->d2_iters  = 0			;
 
 	this->pcm->trace.msg("base addr %x\ntot len %d\nd0 len %d\nd0 stride %d\nd1 len %d\nd1 stride %d\nd2 stride %d\nd3 stride %d\n",
 		this->base_addr	,
