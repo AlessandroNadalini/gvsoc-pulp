@@ -61,7 +61,7 @@ class Pulp_open(st.Component):
         cluster_clocks = []
         for cid in range(0, nb_cluster):
             cluster_name = get_cluster_name(cid)
-            cluster_clocks.append(Clock_domain(self, cluster_name + '_clock', frequency=50000000))
+            cluster_clocks.append(Clock_domain(self, cluster_name + '_clock', frequency=400000000))
 
         # Clusters
         clusters = []

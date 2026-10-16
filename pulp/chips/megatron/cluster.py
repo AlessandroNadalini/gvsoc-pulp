@@ -136,7 +136,9 @@ class Cluster(st.Component):
 
         # PCM
         #mvm_latency = cluster_conf.get_property('pcm/mvm_latency', int)
-        mvm_latency = 300 # MVM latency in ns
+        mvm_latency_ns = 330 # MVM latency in ns
+        clk_period = 2.5 # Clock period in seconds
+        mvm_latency = int(mvm_latency_ns/(clk_period))
         pcm = Pcm(self, 'pcm', mvm_latency=mvm_latency, stim_file=None)
         self.pcm = pcm
 
