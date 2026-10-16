@@ -95,12 +95,18 @@ class Pcm_HWPE_Engine {
         bool            ext_write           ;
         bool            ext_data_in_shift   ;
         uint64_t        ext_data_in         ;
-        uint64_t        ext_data_out        ; // 8x 8-bits elements: w.r.t. the modeled IP, we provide the outputs already quantized to 8-bits
+        uint64_t        ext_data_out        ;
         uint32_t        user_registers[2]   ;
         int8_t          Xi[512]             ;
         int8_t          weights[8*512*512]  ;
-        int8_t          Yi[512]             ;
+        int16_t         Yi[512]             ; // MVM outputs requantized to out_bits, stored as int16
         uint32_t        mvm_latency         ;
+        double          requant_scale       ;
+        int32_t         out_min             ;
+        int32_t         out_max             ;
+        uint8_t         local_array[4]      ; // Active local arrays, set by handle_compute()
+
+        int stream_out_results();
 };
 
 class Pcm_HWPE_Streamer {

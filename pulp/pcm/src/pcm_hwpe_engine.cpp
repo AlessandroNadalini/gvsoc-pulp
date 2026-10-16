@@ -1,6 +1,7 @@
 #include <fstream>
 #include <sstream>
 #include <cstdint>
+#include <cmath>
 #include <pcm.hpp>
 
 // Helper function for selecting the right sector when reusing matrix weights
@@ -91,6 +92,12 @@ Pcm_HWPE_Engine::Pcm_HWPE_Engine(Pcm_HWPE* pcm){
     this->ext_data_out = 0;
     this->mvm_latency = this->pcm->get_js_config()->get_child_int("mvm_latency");
 
+    // Requantization of the MVM results (out_bits and requant_scale set by pcm.py)
+    int out_bits = this->pcm->get_js_config()->get_child_int("out_bits");
+    this->requant_scale = this->pcm->get_js_config()->get("requant_scale")->get_double();
+    this->out_min = -(1 << (out_bits - 1));
+    this->out_max = (1 << (out_bits - 1)) - 1;
+
     for(uint32_t i=0; i<512; i++)
         this->Xi_buf[i] = 0;
 }
@@ -176,12 +183,32 @@ void Pcm_HWPE_Engine::compute_mvm(Pcm_HWPE *pcm, uint16_t sec_mask, bool sec_reu
         this->pcm->trace.msg(vp::TraceLevel::DEBUG, "full_prec_res[%d] = %d\n", i, full_prec_res[i]);
     }
 
-    // Cast full precision results to 8 bit and write to output buffer
+    // Requantize full precision results to out_bits (round to nearest, ties to even) and write to output buffer
     for (uint32_t i=0; i<512; i++){
-        this->Yi[i] = std::max(-128, std::min(full_prec_res[i], 127));
+        int64_t y = std::llrint(full_prec_res[i] * this->requant_scale);
+        this->Yi[i] = (int16_t)std::clamp<int64_t>(y, this->out_min, this->out_max);
     }
 
     pcm->trace.msg(vp::TraceLevel::DEBUG, "Finished MVM computation\n");
+}
+
+// Stream the requantized MVM results (int16) of the active local arrays out to memory.
+// Each local array produces 128 outputs, i.e. 256 B = 32 chunks of 8 B. The output
+// streamer only advances on written chunks, so results of active local arrays end up
+// packed in memory. Returns the latency of the data movement.
+int Pcm_HWPE_Engine::stream_out_results() {
+    const uint32_t chunk_bytes = 8;
+    const uint32_t n_chunks = sizeof(this->Yi) / chunk_bytes;
+    const uint32_t chunks_per_la = n_chunks / 4;
+    int latency = 0;
+
+    this->pcm->trace.msg(vp::TraceLevel::DEBUG, "Streaming out results...\n");
+    for (uint32_t i=0; i<n_chunks; i++) {
+        if (this->local_array[i / chunks_per_la] != 0)
+            latency += this->pcm->out_stream.rw_data(chunk_bytes, (void *)((uint8_t *)this->Yi + chunk_bytes*i), -1);
+    }
+
+    return latency;
 }
 
 vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
@@ -198,9 +225,7 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
     uint8_t active_sectors = 0;
     uint8_t sec_reps = 0;
     uint16_t sec_mask = 0;
-    uint8_t local_array[4] = {0, 0, 0, 0};
-    uint8_t empty_la = 0;
-    uint8_t la_on = 0;
+    std::fill(this->local_array, this->local_array+4, 0);
     
     // Detect active sectors
     sectors[0] = (this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_ACT_SECT_0)]) & 0x0F;
@@ -229,7 +254,7 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
     sec_reps = 4/active_sectors;
 
     // Refill factor, i.e. number of 64-bit requests to do to fill the Xi buffer for 1 computation
-    uint8_t refill_factor = 8 - (8 % active_sectors);
+    uint32_t refill_factor = (128 * active_sectors * sec_reps)/8;
 
     // Clear HWPE status register
     this->pcm->register_file[PCM_HWPE_STATUS>>2] = 0x0;
@@ -241,7 +266,7 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
     // Initial fill of the Xi buffer
     this->pcm->trace.msg(vp::TraceLevel::DEBUG, "Filling Xi buffer\n");
     for (int8_t i = 0; i<refill_factor; i++) {
-            *latency += this->pcm->inp_stream.rw_data(64, (void *)(this->Xi_buf+i*64), -1);
+            *latency += this->pcm->inp_stream.rw_data(8, (void *)(this->Xi_buf+i*8), -1);
     }
 
     // Read Xi buffer - just for debugging
@@ -260,19 +285,7 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
     this->compute_mvm(this->pcm, sec_mask, false, 0);
     *latency += this->mvm_latency;
 
-    this->pcm->trace.msg(vp::TraceLevel::DEBUG, "Streaming out results...\n");
-    empty_la = 0;
-    la_on = 0;
-    for (uint32_t i=0; i<8; i++) {
-        this->pcm->trace.msg(vp::TraceLevel::DEBUG, "la_on = %d, empty_la = %d\n", la_on, empty_la);
-        if (local_array[i>>1] != 0) {
-            this->pcm->out_stream.rw_data(64, (void *)(this->Yi+64*i-empty_la), -1);
-            la_on++;
-        } else {
-            if (la_on > 0 && ((la_on>>1) != (i>>1)) && ((la_on>>1) != (i>>2)))
-                empty_la++;
-        }
-    }
+    this->stream_out_results();
 
     // Weights re-use
     if (sec_reps > 1) {
@@ -281,25 +294,14 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
             this->compute_mvm(this->pcm, sec_mask, true, rep);
             *latency += this->mvm_latency;
 
-            this->pcm->trace.msg(vp::TraceLevel::DEBUG, "Streaming out results...\n");
-            empty_la = 0;
-            la_on = 0;
-            for (uint32_t i=0; i<8; i++) {
-                if (local_array[i>>1] != 0) {
-                    this->pcm->out_stream.rw_data(64, (void *)(this->Yi+64*i-empty_la), -1);
-                    la_on++;
-                } else {
-                    if (la_on > 0 && ((la_on>>1) != (i>>1) && ((la_on>>1) != (i>>2))))
-                        empty_la++;
-                }
-            }
+            this->stream_out_results();
         }
     }
 
     for(uint32_t j=1; j<(this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_NUM_JOBS)]); j++) {
         // Refill Xi buffer
         for (int8_t i = 0; i<refill_factor; i++) {
-                this->pcm->inp_stream.rw_data(64, (void *)(this->Xi_buf+i*64), -1);
+                this->pcm->inp_stream.rw_data(8, (void *)(this->Xi_buf+i*8), -1);
         }
 
         // Reading Xi buffer, just for debugging
@@ -313,20 +315,8 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
         *latency += mvm_latency;
 
         // Stream outputs (we take into account the latency for the last stream out)
-        this->pcm->trace.msg(vp::TraceLevel::DEBUG, "Streaming out results...\n");
-        empty_la = 0;
-        la_on = 0;
-        if(j<(this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_NUM_JOBS)])-1) {
-            for (uint32_t i=0; i<8; i++) {
-                if (local_array[i>>1] != 0) {
-                    this->pcm->out_stream.rw_data(64, (void *)(this->Yi+64*i-empty_la), -1);
-                    la_on++;
-                } else {
-                    if (la_on > 0 && ((la_on>>1) != (i>>1)) && ((la_on>>1) != (i>>2)))
-                        empty_la++;
-                }
-            }
-        }
+        if(j<(this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_NUM_JOBS)])-1)
+            this->stream_out_results();
 
         // Weights re-use
         if (sec_reps > 1) {
@@ -334,42 +324,19 @@ vp::IoReqStatus Pcm_HWPE_Engine::handle_compute(
                 this->compute_mvm(this->pcm, sec_mask, true, rep);
                 *latency += this->mvm_latency;
 
-                this->pcm->trace.msg(vp::TraceLevel::DEBUG, "Streaming out results...\n");
-                empty_la = 0;
-                la_on = 0;
-                if(j<(this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_NUM_JOBS)])-1) {
-                    for (uint32_t i=0; i<8; i++) {
-                        if (local_array[i>>1] != 0) {
-                            this->pcm->out_stream.rw_data(64, (void *)(this->Yi+64*i-empty_la), -1);
-                            la_on++;
-                        } else {
-                            if (la_on > 0 && ((la_on>>1) != (i>>1)) && ((la_on>>1) != (i>>2)))
-                                empty_la++;
-                        }
-                    }
-                }
+                if(j<(this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_NUM_JOBS)])-1)
+                    this->stream_out_results();
             }
         }
     }
 
-    if((this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_TOTAL_LENGTH)] % 8) != 0) {
-        this->pcm->trace.msg(vp::TraceLevel::DEBUG, "Total length = %d, total_length % 8 = %d\n", (this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_TOTAL_LENGTH)]), (this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_TOTAL_LENGTH)] % 8));
+    if((this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_TOTAL_LENGTH)] % refill_factor) != 0) {
+        this->pcm->trace.msg(vp::TraceLevel::DEBUG, "Total length = %d, total_length % %d = %d\n", (this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_TOTAL_LENGTH)]), refill_factor, (this->pcm->job.regs[PCM_JOB_REG_IDX(PCM_HWPE_TOTAL_LENGTH)] % refill_factor));
         this->pcm->trace.fatal("Leftovers still not implemented!! Please zero-pad your inputs/outputs\n");
     }
 
     // Last stream out: we take into account the latency for this data movement
-    this->pcm->trace.msg(vp::TraceLevel::DEBUG, "Streaming out results...\n");
-    empty_la = 0;
-    la_on = 0;
-    for (uint32_t i=0; i<8; i++) {
-        if (local_array[i>>1] != 0) {
-            *latency+=this->pcm->out_stream.rw_data(64, (void *)(this->Yi+64*i-empty_la), -1);
-            la_on++;
-        } else {
-            if (la_on > 0 && ((la_on>>1) != (i>>1)) && ((la_on>>1) != (i>>2)))
-                empty_la++;
-        }
-    }
+    *latency += this->stream_out_results();
    
     return vp::IO_REQ_OK;
 }
